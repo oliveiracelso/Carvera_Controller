@@ -4068,7 +4068,6 @@
                                     RoundButton:
                                         text: 'Z+'
                                         bg_normal_color: 255/255, 199/255, 0/255, 1  # SNES B yellow
-                                        color: 0, 0, 0, 1
                                         on_press: root.controller.jog("Z{}".format(root.step_z.text))
                                         on_release: root.controller.stopContinuousJog()
                                 GridBoxLayout:
@@ -4105,7 +4104,6 @@
                                     RoundButton:
                                         text: 'Z-'
                                         bg_normal_color: 255/255, 199/255, 0/255, 1  # SNES B yellow
-                                        color: 0, 0, 0, 1
                                         on_press: root.controller.jog("Z-{}".format(root.step_z.text))
                                         on_release: root.controller.stopContinuousJog()
 
