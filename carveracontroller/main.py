@@ -1489,11 +1489,11 @@ class WCSSettingsPopup(ModalView):
         """Populate the WCS fields with parsed data from machine"""
 
         def update_ui(dt):
-            # wcs_data format: {'G54': [x, y, z, a, rotation], 'G55': [...], ...}
+            # wcs_data format: {'G54': [x, y, z, a, b, rotation], 'G55': [...], ...}
 
             for wcs, values in wcs_data.items():
-                if len(values) >= 5:  # Ensure we have X, Y, Z, A, rotation
-                    x, y, z, a, b, rotation = values
+                if len(values) >= 6:  # Ensure we have X, Y, Z, A, B, rotation
+                    x, y, z, a, b, rotation = values[:6]
 
                     # Store original values for comparison
                     self.original_values[wcs] = {"X": x, "Y": y, "Z": z, "A": a, "B": b, "R": rotation}
@@ -2981,6 +2981,7 @@ class Makera(RelativeLayout):
     show_update = True
     instantFSoverride = True
     fw_upd_text = ""
+    fw_release_version = ""
     fw_version_new = ""
     fw_version = ""
     fw_version_checking = False
@@ -2996,6 +2997,7 @@ class Makera(RelativeLayout):
     decomptime = 0
 
     ctl_upd_text = ""
+    ctl_release_version = ""
     ctl_version_new = ""
     ctl_version = ""
 
@@ -3503,23 +3505,32 @@ class Makera(RelativeLayout):
             Config.write()
         self.upgrade_popup.dismiss(self)
 
+    # GitHub's API rejects requests without a User-Agent.
+    _GITHUB_API_HEADERS = {
+        "User-Agent": "CarveraControllerCommunity",
+        "Accept": "application/vnd.github+json",
+    }
+
     def check_for_updates(self):
         self.fw_upd_text = ""
+        self.fw_release_version = ""
         self.fw_version_checked = False
         self.ctl_upd_text = ""
-        UrlRequest(FW_UPD_ADDRESS, on_success=self.fw_upd_loaded)
-        UrlRequest(CTL_UPD_ADDRESS, on_success=self.ctl_upd_loaded)
+        self.ctl_release_version = ""
+        UrlRequest(FW_UPD_ADDRESS, on_success=self.fw_upd_loaded, req_headers=self._GITHUB_API_HEADERS)
+        UrlRequest(CTL_UPD_ADDRESS, on_success=self.ctl_upd_loaded, req_headers=self._GITHUB_API_HEADERS)
 
     def fw_upd_loaded(self, req, result):
-        # parse result
-        self.fw_upd_text = result
+        version, notes = Utils.parse_github_release(result)
+        self.fw_release_version = version
+        # Non-empty text marks the download as finished for the idle-time check.
+        self.fw_upd_text = notes or (("v" + version) if version else "")
 
     def check_fw_version(self):
         self.upgrade_popup.fw_upd_text.text = self.fw_upd_text
         self.upgrade_popup.fw_upd_text.cursor = (0, 0)  # Position the cursor at the top of the text
-        versions = re.search(r"\[[0-9]+\.[0-9]+\.[0-9]+\]", self.fw_upd_text)
-        if versions != None:
-            self.fw_version_new = versions[0][1 : len(versions[0]) - 1]
+        if self.fw_release_version:
+            self.fw_version_new = self.fw_release_version
             if self.fw_version != "":
                 app = App.get_running_app()
                 if Utils.digitize_v(self.fw_version_new) > Utils.digitize_v(self.fw_version):
@@ -3533,7 +3544,9 @@ class Makera(RelativeLayout):
         self.fw_version_checked = True
 
     def ctl_upd_loaded(self, req, result):
-        self.ctl_upd_text = result
+        version, notes = Utils.parse_github_release(result)
+        self.ctl_release_version = version
+        self.ctl_upd_text = notes or (("v" + version) if version else "")
         Clock.schedule_once(self.check_ctl_version, 0)
 
     def change_language(self, lang_desc):
@@ -3551,9 +3564,8 @@ class Makera(RelativeLayout):
     def check_ctl_version(self, *args):
         self.upgrade_popup.ctl_upd_text.text = self.ctl_upd_text
         self.upgrade_popup.ctl_upd_text.cursor = (0, 0)  # Position the cursor at the top of the text
-        versions = re.search(r"\[[0-9]+\.[0-9]+\.[0-9]+\]", self.ctl_upd_text)
-        if versions != None:
-            self.ctl_version_new = versions[0][1 : len(versions[0]) - 1]
+        if self.ctl_release_version:
+            self.ctl_version_new = self.ctl_release_version
             app = App.get_running_app()
             if Utils.digitize_v(self.ctl_version_new) > Utils.digitize_v(self.ctl_version):
                 app.ctl_has_update = True
@@ -5857,8 +5869,10 @@ class Makera(RelativeLayout):
             or (not app.selected_remote_filename and not app.selected_local_filename)
             or not self.selected_file_line_count
             or app.state in self._PROGRESS_TIMER_PAUSED_STATES
+            or app.state in (NOT_CONNECTED, CONNECTED)
         ):
-            # While held/paused, leave the last progress_info unchanged so both timers freeze.
+            # While held/paused (or with no live machine), leave the last
+            # progress_info unchanged so both timers freeze.
             return
         remaining_display = self._current_remaining_sec()
         filename = os.path.basename(app.selected_remote_filename or app.selected_local_filename)
@@ -6202,8 +6216,15 @@ class Makera(RelativeLayout):
                 self.coord_system_data_view.main_text = wcs_description
             else:
                 self.coord_system_data_view.main_text = coord_system_name
-            self.coord_system_data_view.minr_text = coord_system_name
-            self.coord_system_data_view.scale = 80.0 if abs(rotation_angle) > 0.01 else 100.0
+            # Take turns between the WCS name and the rotation angle (same
+            # pattern as the feed/spindle/tool buttons), so a rotated WCS
+            # shows its angle without ever hiding the WCS name (#637).
+            has_rotation = abs(rotation_angle) > 0.001
+            if has_rotation and self.status_index % 2 == 1:
+                self.coord_system_data_view.minr_text = f"R: {rotation_angle:.3f}°"
+            else:
+                self.coord_system_data_view.minr_text = coord_system_name
+            self.coord_system_data_view.scale = 80.0 if has_rotation else 100.0
 
             # Update WCS Settings popup if it's open
             if hasattr(self, "wcs_settings_popup") and self.wcs_settings_popup.parent:
@@ -6246,6 +6267,12 @@ class Makera(RelativeLayout):
                 "2.1.0"
             )  # in community firmware > 2.1.0 the machine state has a is_playing attribute
             machine_not_playing = CNC.vars["is_playing"] == 0 if use_cf_playing_flag else CNC.vars["playedlines"] <= 0
+            # A dead link must read as not playing: after a disconnect,
+            # is_playing/playedlines hold the last values the machine sent
+            # (still "playing" when playback was just aborted), which would
+            # leave the remaining-time countdown running (#712).
+            if CNC.vars["state"] in (NOT_CONNECTED, CONNECTED):
+                machine_not_playing = True
 
             # update progress bar and set selected
             if machine_not_playing:
@@ -8155,8 +8182,11 @@ def load_constants():
     global DOWNLOAD_ADDRESS
     global FW_DOWNLOAD_ADDRESS
 
-    FW_UPD_ADDRESS = "https://raw.githubusercontent.com/carvera-community/carvera_community_firmware/master/version.txt"
-    CTL_UPD_ADDRESS = "https://raw.githubusercontent.com/carvera-community/carvera_controller/main/CHANGELOG.md"
+    # /releases/latest returns the newest published, non-prerelease, non-draft
+    # release — so merged-but-unreleased changes and RCs are never offered as
+    # updates (issue #652).
+    FW_UPD_ADDRESS = "https://api.github.com/repos/Carvera-Community/Carvera_Community_Firmware/releases/latest"
+    CTL_UPD_ADDRESS = "https://api.github.com/repos/Carvera-Community/Carvera_Controller/releases/latest"
     DOWNLOAD_ADDRESS = "https://github.com/carvera-community/carvera_controller/releases/latest"
     FW_DOWNLOAD_ADDRESS = "https://github.com/Carvera-Community/Carvera_Community_Firmware/releases/latest"
 
