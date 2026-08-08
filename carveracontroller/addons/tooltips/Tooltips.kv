@@ -5,7 +5,7 @@
     background_color: 0,0,0,0
     canvas.before:
         Color:
-            rgba: (88/255,88/255,88/255,1) if self.state=='normal' else (50/255,164/255,206/255,1)
+            rgba: self.bg_normal_color if self.state=='normal' else (50/255,164/255,206/255,1)
         RoundedRectangle:
 
             pos: self.pos

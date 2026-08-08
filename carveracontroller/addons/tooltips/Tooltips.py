@@ -414,6 +414,9 @@ class ToolTipButton(Button):
     tooltip_delay = NumericProperty(0.5)
     show_tooltips = BooleanProperty(False)
     tooltip_image_size = ObjectProperty(None, allownone=True)
+    # Background color in the normal state; the kv rule uses it so individual
+    # buttons (e.g. the jog cluster) can be tinted without a new class.
+    bg_normal_color = ListProperty([88 / 255, 88 / 255, 88 / 255, 1])
     # Optional generated texture (e.g. tool silhouettes). Takes precedence over
     # tooltip_image when set.
     tooltip_texture = ObjectProperty(None, allownone=True)

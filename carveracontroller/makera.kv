@@ -302,9 +302,10 @@
 
 <RoundButton@Button>:
     background_color: 0,0,0,0  # the last zero is the critical on, make invisible
+    bg_normal_color: 88/255,88/255,88/255,1
     canvas.before:
         Color:
-            rgba: (88/255,88/255,88/255,1) if self.state=='normal' else (50/255,164/255,206/255,1)  # visual feedback of press
+            rgba: self.bg_normal_color if self.state=='normal' else (50/255,164/255,206/255,1)  # visual feedback of press
         RoundedRectangle:
             pos: self.pos
             size: self.size
@@ -3772,6 +3773,7 @@
                                 GridBoxLayout:
                                     ToolTipButton:
                                         text: 'Y+' if app.invert_y_axis_jogging else "Y-"
+                                        bg_normal_color: 0/255, 153/255, 68/255, 1  # SNES Y green
                                         on_press: root.controller.jog("Y{}{}".format('' if app.invert_y_axis_jogging else '-', root.step_xy.text))
                                         on_release: root.controller.stopContinuousJog()
                                         tooltip_image: 'data/AxisMotion/AxisMotion_YPos.png' if app.invert_y_axis_jogging else 'data/AxisMotion/AxisMotion_YNeg.png'
@@ -3782,6 +3784,7 @@
                                 GridBoxLayout:
                                     ToolTipButton:
                                         text: 'X-'
+                                        bg_normal_color: 0/255, 91/255, 172/255, 1  # SNES X blue
                                         on_press: root.controller.jog("X-{}".format(root.step_xy.text))
                                         on_release: root.controller.stopContinuousJog()
                                         tooltip_image: 'data/AxisMotion/AxisMotion_XNeg.png'
@@ -3802,6 +3805,7 @@
                                 GridBoxLayout:
                                     ToolTipButton:
                                         text: 'X+'
+                                        bg_normal_color: 0/255, 91/255, 172/255, 1  # SNES X blue
                                         on_press: root.controller.jog("X{}".format(root.step_xy.text))
                                         on_release: root.controller.stopContinuousJog()
                                         tooltip_image: 'data/AxisMotion/AxisMotion_XPos.png'
@@ -3812,6 +3816,7 @@
                                 GridBoxLayout:
                                     ToolTipButton:
                                         text: 'Y-' if app.invert_y_axis_jogging else "Y+"
+                                        bg_normal_color: 0/255, 153/255, 68/255, 1  # SNES Y green
                                         on_press: root.controller.jog("Y{}{}".format('-' if app.invert_y_axis_jogging else '', root.step_xy.text))
                                         on_release: root.controller.stopContinuousJog()
                                         tooltip_image: 'data/AxisMotion/AxisMotion_YNeg.png' if app.invert_y_axis_jogging else 'data/AxisMotion/AxisMotion_YPos.png'
@@ -4052,6 +4057,7 @@
                                 GridBoxLayout:
                                     ToolTipButton:
                                         text: 'A+'
+                                        bg_normal_color: 230/255, 0/255, 18/255, 1  # SNES A red
                                         on_press: root.controller.jog("A{}".format(root.step_a.text))
                                         on_release: root.controller.stopContinuousJog()
                                         tooltip_image: 'data/AxisMotion/AxisMotion_APos.png'
@@ -4061,6 +4067,8 @@
                                 GridBoxLayout:
                                     RoundButton:
                                         text: 'Z+'
+                                        bg_normal_color: 255/255, 199/255, 0/255, 1  # SNES B yellow
+                                        color: 0, 0, 0, 1
                                         on_press: root.controller.jog("Z{}".format(root.step_z.text))
                                         on_release: root.controller.stopContinuousJog()
                                 GridBoxLayout:
@@ -4086,6 +4094,7 @@
                                 GridBoxLayout:
                                     ToolTipButton:
                                         text: 'A-'
+                                        bg_normal_color: 230/255, 0/255, 18/255, 1  # SNES A red
                                         on_press: root.controller.jog("A-{}".format(root.step_a.text))
                                         on_release: root.controller.stopContinuousJog()
                                         tooltip_image: 'data/AxisMotion/AxisMotion_ANeg.png'
@@ -4095,6 +4104,8 @@
                                 GridBoxLayout:
                                     RoundButton:
                                         text: 'Z-'
+                                        bg_normal_color: 255/255, 199/255, 0/255, 1  # SNES B yellow
+                                        color: 0, 0, 0, 1
                                         on_press: root.controller.jog("Z-{}".format(root.step_z.text))
                                         on_release: root.controller.stopContinuousJog()
 
