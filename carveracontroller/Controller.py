@@ -20,6 +20,7 @@ from functools import partial
 
 from . import Utils
 from .CNC import CMDPAT, CNC, LASER_TOOL_NUMBER, PARENPAT, SEMIPAT, ZPROBE_TOOL_NUMBER
+from .machine.command_flow import CommandFlowControl
 from .protocols import MessageKind, ProtocolSession
 from .USBStream import USBStream
 from .WIFIStream import WIFIStream
@@ -108,6 +109,11 @@ class Controller:
         # thread) and command senders (UI thread) share one socket/serial port;
         # without a lock their writes can interleave mid-command.
         self._send_lock = threading.RLock()
+
+        # Paces queued command sends so bursts (resume-at-line, CMM Workbench,
+        # probing sequences) cannot overrun the firmware's single pending-command
+        # slot / shallow command queue. Drained by streamIO.
+        self._cmd_flow = CommandFlowControl()
 
         # Reconnection properties
         self.reconnect_enabled = True
@@ -235,30 +241,48 @@ class Controller:
     # ----------------------------------------------------------------------
     # Execute a single command
     # ----------------------------------------------------------------------
-    def executeCommand(self, line):
-        # if self.sio_status != False or self.sio_diagnose != False:      #wait for the ? or * command
-        #    time.sleep(0.5)
-        if self.stream and line:
-            try:
-                if isinstance(line, str) and not line.endswith("\n"):
-                    line += "\n"
-                # Soft `reset` over USB leaves the board powered (zombie state).
-                if isinstance(line, str) and self.connection_type == CONN_USB and line.lower().startswith("reset"):
-                    self._notify_usb_reset_blocked()
-                    return
-                payload = line.encode() if isinstance(line, str) else line
-                with self._send_lock:
-                    self.stream.send(self.comms.encode_command(payload))
-                if self.execCallback:
-                    display = line if isinstance(line, str) else line.decode(errors="ignore")
-                    # Strip ".lz" suffix for display
-                    if display.endswith(".lz\n"):
-                        new_line = display[:-4] + "\n"
-                    else:
-                        new_line = display
-                    self.execCallback(new_line)
-            except Exception:
-                self.log.put((Controller.MSG_ERROR, str(sys.exc_info()[1])))
+    def executeCommand(self, line, immediate=False):
+        if not (self.stream and line):
+            return
+        if isinstance(line, str) and not line.endswith("\n"):
+            line += "\n"
+        # Soft `reset` over USB leaves the board powered (zombie state).
+        if isinstance(line, str) and self.connection_type == CONN_USB and line.lower().startswith("reset"):
+            self._notify_usb_reset_blocked()
+            return
+        # Queue by default so bursts are paced by streamIO (firmware holds one
+        # pending command over WiFi and a 4-deep queue over USB). `immediate`
+        # bypasses the queue for commands that cannot wait for the drain loop:
+        # abort/suspend/resume, and baud/reset flows that run while streamIO is
+        # parked or about to tear the link down.
+        if immediate or not self._stream_io_running():
+            self._send_command_now(line)
+            return
+        self._cmd_flow.enqueue(line)
+        self._echo_command(line)
+
+    def _stream_io_running(self):
+        thread = self.thread
+        return thread is not None and thread.is_alive() and not self.stop.is_set()
+
+    def _send_command_now(self, line, echo=True):
+        try:
+            payload = line.encode() if isinstance(line, str) else line
+            with self._send_lock:
+                self.stream.send(self.comms.encode_command(payload))
+            if echo:
+                self._echo_command(line)
+        except Exception:
+            self.log.put((Controller.MSG_ERROR, str(sys.exc_info()[1])))
+
+    def _echo_command(self, line):
+        if not self.execCallback:
+            return
+        display = line if isinstance(line, str) else line.decode(errors="ignore")
+        # Strip ".lz" suffix for display
+        if display.endswith(".lz\n"):
+            display = display[:-4] + "\n"
+        self.execCallback(display)
 
     def _notify_usb_reset_blocked(self):
         if App is None or Clock is None:
@@ -462,7 +486,7 @@ class Controller:
             self.gotoPathOrigin(buffer)
 
     def reset(self):
-        self.executeCommand("reset\n")
+        self.executeCommand("reset\n", immediate=True)
 
     def change(self):
         app = App.get_running_app()
@@ -707,10 +731,11 @@ class Controller:
         self.executeFileCommand(self.escape(download_command))
 
     def suspendCommand(self):
-        self.executeCommand("suspend\n")
+        # Must not wait behind queued bursts: this is the user hitting pause.
+        self.executeCommand("suspend\n", immediate=True)
 
     def resumeCommand(self):
-        self.executeCommand("resume\n")
+        self.executeCommand("resume\n", immediate=True)
 
     def playCommand(self, filename, has_ocodes=False):
         flag = " -O" if has_ocodes else ""
@@ -1291,7 +1316,10 @@ class Controller:
             Clock.schedule_once(partial(self._wait_for_pause_and_continue_cmd_list_execution, remaining_commands), 0.1)
 
     def abortCommand(self):
-        self.executeCommand("abort\n")
+        # Aborting cancels the intent of anything still queued; drop it and
+        # jump the queue.
+        self._cmd_flow.clear()
+        self.executeCommand("abort\n", immediate=True)
 
     def feedholdCommand(self):
         self.executeRealtime(ord("!"))
@@ -1310,7 +1338,7 @@ class Controller:
 
     # ----------------------------------------------------------------------
     def hardResetPre(self):
-        self.executeCommand("reset\n")
+        self.executeCommand("reset\n", immediate=True)
 
     def hardResetAfter(self):
         time.sleep(6)
@@ -1591,6 +1619,7 @@ class Controller:
             except Exception:
                 self.log.put((self.MSG_ERROR, "Controller clear thread error!"))
             self.comms.detect_and_select(transport)
+            self._cmd_flow.clear()
             self.stream = transport
             self.thread = threading.Thread(target=self.streamIO)
             self.thread.start()
@@ -1614,6 +1643,7 @@ class Controller:
         self._runLines = 0
         time.sleep(0.5)
         self.thread = None
+        self._cmd_flow.clear()
         try:
             self.stream.close()
         except Exception:
@@ -1641,6 +1671,7 @@ class Controller:
         self._runLines = 0
         time.sleep(0.5)
         self.thread = None
+        self._cmd_flow.clear()
         try:
             self.stream.close()
         except Exception:
@@ -2052,7 +2083,8 @@ class Controller:
         # Stop streamIO and wait until it is parked so it cannot steal the "ok".
         self.pauseStream(0.0)
         try:
-            self.executeCommand(f"baud {baud}\n")
+            # streamIO is parked at this point, so the queue would never drain.
+            self.executeCommand(f"baud {baud}\n", immediate=True)
             # Firmware prints framed/text "ok" at the old baud, then switches.
             # Give TX time to finish, then reopen the host port at the new rate.
             time.sleep(0.15)
@@ -2079,7 +2111,7 @@ class Controller:
         """Best-effort restore of 115200 after a failed high-baud switch."""
         try:
             # Machine may already be at attempted_baud — ask it to drop back.
-            self.executeCommand("baud 115200\n")
+            self.executeCommand("baud 115200\n", immediate=True)
             time.sleep(0.15)
         except Exception:
             pass
@@ -2223,6 +2255,14 @@ class Controller:
                     if self.diagnosing and t - td > DIAGNOSE_POLL:
                         self.viewDiagnoseReport(True)
                         td = t
+                    # Release at most one queued command per iteration; the next
+                    # is held until the machine is heard from again (or the ack
+                    # timeout passes), so bursts cannot wedge the firmware's
+                    # receive path.
+                    queued_command = self._cmd_flow.pop_ready(t)
+                    if queued_command is not None:
+                        self._send_command_now(queued_command, echo=False)
+                        dynamic_delay = 0
                 else:
                     tr = t
                     td = t
@@ -2231,7 +2271,10 @@ class Controller:
                     data = self.stream.recv()
                     if data:
                         allow_wire_switch = self.sendNUM == 0 and self.loadNUM == 0
-                        for message in self.comms.feed(data, allow_wire_switch=allow_wire_switch):
+                        messages = list(self.comms.feed(data, allow_wire_switch=allow_wire_switch))
+                        if messages:
+                            self._cmd_flow.note_receive()
+                        for message in messages:
                             self._handle_protocol_message(message)
                     dynamic_delay = 0
                 else:
