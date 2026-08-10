@@ -1,0 +1,79 @@
+name: build-ios-ipa
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-ios-ipa:
+    name: build-ios-ipa
+    runs-on: macos-15
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Cache build directory
+      uses: actions/cache@v4
+      with:
+        path: |
+          build
+          dist
+        key: ${{ runner.os }}-ios-build-${{ hashFiles('**/poetry.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-ios-build-
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: 3.12
+
+    - name: Install poetry and dependencies
+      uses: ./.github/actions/bootstrap-poetry
+      with:
+        os: ios
+
+    - name: Build kivy-ios toolchain
+      run: |
+        ln -sf "$(pwd)/dist" assets/packaging/ios/dist
+        poetry run python -m kivy_ios.toolchain build \
+          --add-custom-recipe assets/packaging/ios/recipes/quicklz \
+          --add-custom-recipe assets/packaging/ios/recipes/pyserial \
+          kivy quicklz pyserial
+        poetry run python -m kivy_ios.toolchain update \
+          --add-custom-recipe assets/packaging/ios/recipes/quicklz \
+          --add-custom-recipe assets/packaging/ios/recipes/pyserial \
+          assets/packaging/ios/carveracontroller-ios
+
+    - name: Set version
+      run: |
+        VERSION=$(date +'%Y.%m.%d')
+        plutil -replace CFBundleShortVersionString -string "$VERSION" assets/packaging/ios/carveracontroller-ios/carveracontroller-Info.plist
+        plutil -replace CFBundleVersion -string "$VERSION" assets/packaging/ios/carveracontroller-ios/carveracontroller-Info.plist
+
+    - name: Build unsigned device app
+      run: |
+        xcodebuild \
+          -project assets/packaging/ios/carveracontroller-ios/CarveraController.xcodeproj \
+          -scheme CarveraController \
+          -configuration Release \
+          -sdk iphoneos \
+          -derivedDataPath build/ios-derived \
+          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+
+    - name: Package unsigned IPA
+      run: |
+        APP_DIR=$(find build/ios-derived/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -n 1)
+        echo "Packaging $APP_DIR"
+        rm -rf ipa
+        mkdir -p ipa/Payload
+        cp -R "$APP_DIR" ipa/Payload/
+        cd ipa
+        zip -qry ../carveracontroller-community-unsigned.ipa Payload
+
+    - name: Upload IPA artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ios-ipa-unsigned
+        path: carveracontroller-community-unsigned.ipa
+        retention-days: 7
